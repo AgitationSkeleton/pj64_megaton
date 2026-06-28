@@ -1,0 +1,21 @@
+bin/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+x64/
+Win32/
+*.user
+*.aps
+*.ncb
+*.suo
+.vs/
+*.obj
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.lastbuildstate
+*.log
+# Android tree has paths exceeding Windows MAX_PATH and is not part of the MH PJ64 fork
+Android/
+packages/
