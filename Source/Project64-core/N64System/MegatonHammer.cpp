@@ -253,6 +253,38 @@ static uint32_t MhScanForPlayState(uint32_t chunk, uint32_t playInit)
     return 0;
 }
 
+// DIAGNOSTIC: find the loaded dmadata table in RAM (starts with the makerom entry {0,0x1060,0,0} followed
+// by {0x1060,...}) and report whether it covers targetVrom — mirrors DmaMgr_FindDmaEntry. If an appended
+// scene's VROM is NOT covered here, the scene DMA faults (hang/black), even if the entry was written to ROM.
+static void MhCheckMmDma(uint32_t targetVrom)
+{
+    uint32_t size = g_MMU->RdramSize();
+    if (size == 0 || size > 0x800000) size = 0x800000;
+    uint32_t end = kRamBase + size;
+    for (uint32_t a = kRamBase; a + 0x20 < end; a += 4)
+    {
+        uint32_t v0 = 0, v1 = 0, v2 = 0, v3 = 0, w0 = 0;
+        g_MMU->MemoryValue32(a, v0); g_MMU->MemoryValue32(a + 4, v1);
+        g_MMU->MemoryValue32(a + 8, v2); g_MMU->MemoryValue32(a + 12, v3);
+        if (v0 != 0 || v1 != 0x1060 || v2 != 0 || v3 != 0) continue;   // makerom entry {0,0x1060,0,0}
+        g_MMU->MemoryValue32(a + 16, w0);
+        if (w0 != 0x1060) continue;                                    // 2nd entry vromStart == 0x1060
+        int count = 0; bool covered = false; uint32_t lastVe = 0;
+        for (uint32_t p = a; p + 16 <= end && count < 4000; p += 16, count++)
+        {
+            uint32_t vs = 0, ve = 0;
+            g_MMU->MemoryValue32(p, vs); g_MMU->MemoryValue32(p + 4, ve);
+            if (ve == 0 && vs == 0) break;                             // terminator
+            lastVe = ve;
+            if (targetVrom >= vs && targetVrom < ve) covered = true;
+        }
+        MhLog("[mh] MM dmadata @0x%08X entries=%d lastVromEnd=0x%08X covers 0x%08X = %s",
+              a, count, lastVe, targetVrom, covered ? "YES" : "NO");
+        return;
+    }
+    MhLog("[mh] MM dmadata table not found in RAM");
+}
+
 // Heuristic MM PlayState scan (we don't have a verified Play_Init for the EU debug build): find a GameState
 // whose three function pointers (main/destroy/init at +4/+8/+C) are DISTINCT code pointers and whose
 // sceneId (+0xA4) is a plausible scene id. Logs the found init value so the real Play_Init can be learned.
@@ -619,6 +651,10 @@ extern "C" void MegatonHammer_PerFrame()
                       (unsigned long long)sFrame, entr, curMode);
             }
         }
+        // One-shot DMA diagnostic: is the append target VROM (0x02EDB000 = Termina-clone) in the RAM dmadata?
+        // (Stable for a Termina-cloned append. For overwrite it's expected NO — that just confirms the probe.)
+        static bool sMmDmaChecked = false;
+        if (!sMmDmaChecked && sFrame >= 60) { sMmDmaChecked = true; MhCheckMmDma(0x02EDB000); }
         return;
     }
 
