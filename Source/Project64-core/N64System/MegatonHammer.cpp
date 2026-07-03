@@ -235,20 +235,30 @@ static bool MhDetectOotDebug()
 // with valid neighbouring pointers). Returns its vaddr or 0; advances sScanCursor across frames.
 static uint32_t MhScanForPlayState(uint32_t chunk, uint32_t playInit)
 {
+    // Match the PLAY gamestate by its distinctive SIZE (~0x12518), NOT init == Play_Init: GameState.init is
+    // cleared during gameplay (see kGS_init note), so the old init match never found the live PlayState under
+    // auto-boot → MhDoWarp never fired → the requested age + custom inventory silently never applied (the same
+    // failure fixed for MM). Size + valid gfx/main/destroy pointers uniquely identify the PlayState.
+    (void)playInit;
     uint32_t size = g_MMU->RdramSize();
     if (size == 0 || size > 0x800000) size = 0x800000;
     uint32_t end = kRamBase + size;
+    const uint32_t codeLo = 0x80000400, codeHi = 0x80400000;
     for (uint32_t n = 0; n < chunk && sScanCursor + kPlayStateSize < end; sScanCursor += 4, n++)
     {
-        uint32_t base = sScanCursor, initv;
-        if (!g_MMU->MemoryValue32(base + kGS_init, initv) || initv != playInit) continue;
-        uint32_t mainv = 0, destroyv = 0, gfx = 0;
+        uint32_t base = sScanCursor, mainv = 0, destroyv = 0, gfx = 0, szv = 0, sidWord = 0;
+        g_MMU->MemoryValue32(base + kGS_gfxCtx, gfx);
         g_MMU->MemoryValue32(base + kGS_main, mainv);
         g_MMU->MemoryValue32(base + kGS_destroy, destroyv);
-        g_MMU->MemoryValue32(base + kGS_gfxCtx, gfx);
-        bool ok = mainv >= 0x80000400 && mainv < end && destroyv >= 0x80000400 && destroyv < end &&
-                  gfx >= kRamBase && gfx < end;
-        if (ok) { sScanCursor += 4; return base; }
+        if (gfx < kRamBase || gfx >= end) continue;
+        if (mainv < codeLo || mainv >= codeHi) continue;
+        if (destroyv < codeLo || destroyv >= codeHi) continue;
+        if (mainv == destroyv) continue;
+        if (!g_MMU->MemoryValue32(base + kGS_size, szv) || szv < 0x11000 || szv > 0x14000) continue;
+        if (!g_MMU->MemoryValue32(base + (kPlay_sceneId & ~3u), sidWord)) continue;
+        if ((uint16_t)(sidWord >> 16) >= 0x80) continue;   // sceneId sanity
+        sScanCursor += 4;
+        return base;
     }
     if (sScanCursor + kPlayStateSize >= end) sScanCursor = kRamBase; // wrap and keep looking
     return 0;
@@ -692,6 +702,32 @@ extern "C" void MegatonHammer_PerFrame()
         sLastEntrance = curEntrance;
         sLastGameMode = curMode;
     }
+
+    // ---- Custom/empty inventory + time-of-day (DECOUPLED from the PlayState scan) ----------
+    // The inventory pokes + dayTime target the FIXED kSaveContext, so they need no PlayState. Applying them
+    // only inside MhDoWarp (scan-gated) meant they silently never applied under auto-boot — the OoT twin of
+    // the MM bug (GameState.init is cleared in gameplay so the scan misses the PlayState). Gate instead on
+    // "save is up" = entranceIndex != 0 (the debug save / auto-boot has run) && a valid gameMode, and apply
+    // 3x spaced to beat any late debug-save write. Age is applied pre-scene-load by OotDebugAutoBoot so Link's
+    // model is correct; here we only need the inventory + time (HUD/sky read them live).
+    static int sOotApplied = 0;
+    static uint64_t sOotSaveUpFrame = 0;
+    if (curEntrance != 0 && curMode >= 0 && curMode <= 3 && sOotSaveUpFrame == 0) sOotSaveUpFrame = sFrame;
+    if (sParams.inventory != 0 && sOotSaveUpFrame != 0 && sOotApplied < 3 &&
+        (sFrame - sOotSaveUpFrame) >= (uint64_t)(4 + sOotApplied * 20))
+    {
+        MhApplySavePokes(kSaveContext);
+        uint32_t wTime = 0;
+        if (g_MMU->MemoryValue32(kSaveContext + kOff_dayTime, wTime))
+            g_MMU->UpdateMemoryValue32(kSaveContext + kOff_dayTime,
+                                       (wTime & 0x0000FFFFu) | ((uint32_t)(sParams.timeOfDay & 0xFFFF) << 16));
+        g_MMU->UpdateMemoryValue32(kSaveContext + kOff_nightFlag,
+                                   (sParams.timeOfDay < 0x4555 || sParams.timeOfDay > 0xC000) ? 1u : 0u);
+        sOotApplied++;
+        MhLog("[mh] OoT custom inventory applied @0x%08X (%zu pokes, pass %d, frame=%llu)",
+              kSaveContext, sSavePokes.size(), sOotApplied, (unsigned long long)sFrame);
+    }
+
     // ---- Auto-warp to the editor's entrance once a PlayState exists ------------------------
     // Only acts when params carry a target entrance and the gc-eu-mq-dbg addresses verify (a valid
     // gameMode 0..3), so a wrong ROM is never poked. The warp fires once; the resulting scene is
