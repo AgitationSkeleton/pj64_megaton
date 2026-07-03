@@ -62,7 +62,8 @@ static const uint32_t kPlay_Init = 0x8009A750;   // gc-eu-mq-dbg
 static const uint32_t kGS_gfxCtx = 0x00;         // GameState.gfxCtx
 static const uint32_t kGS_main = 0x04;           // GameState.main
 static const uint32_t kGS_destroy = 0x08;        // GameState.destroy
-static const uint32_t kGS_init = 0x0C;           // GameState.init  (== Play_Init during gameplay)
+static const uint32_t kGS_init = 0x0C;           // GameState.init  (NOT == Play_Init during gameplay — cleared)
+static const uint32_t kGS_size = 0x10;           // GameState.size  (PlayState is ~0x12518 — far bigger than title/file-select)
 static const uint32_t kPlay_sceneId = 0x000A4;   // PlayState.sceneId (s16)
 static const uint32_t kPlay_transitionTrigger = 0x11E15; // PlayState.transitionTrigger (s8)
 static const uint32_t kPlay_nextEntranceIndex = 0x11E1A; // PlayState.nextEntranceIndex (s16)
@@ -304,16 +305,17 @@ static uint32_t MhScanForPlayStateMM(uint32_t chunk)
         if (gfx < kRamBase || gfx >= end) continue;
         if (mainv < codeLo || mainv >= codeHi) continue;
         if (destroyv < codeLo || destroyv >= codeHi) continue;
-        // Require the EXACT play gamestate: init == Play_Init. The old generic "any 3 distinct code funcs"
-        // matched the title/file-select gamestate (init=0x800982E8) and reported its stale sceneId, so the
-        // probe couldn't tell a loaded scene from a black one. codeLo/codeHi kept as a compile guard.
-        if (initv != kMM_Play_Init || codeLo > codeHi) continue;
-        if (mainv == destroyv || mainv == initv || destroyv == initv) continue;   // 3 distinct funcs
-        // sceneId is an s16 at +0xA4 (high half of the word at +0xA4); must be a plausible scene id (< 0x80).
+        if (mainv == destroyv) continue;
+        // Match the PLAY gamestate by its distinctive SIZE (~0x12518) — far larger than title/file-select.
+        // (init is NOT Play_Init during gameplay; matching on it found nothing even for a working scene.)
+        uint32_t szv = 0;
+        if (!g_MMU->MemoryValue32(base + kGS_size, szv)) continue;
+        if (szv < 0x11000 || szv > 0x14000) continue;
         if (!g_MMU->MemoryValue32(base + (kMM_Play_sceneId & ~3u), sidWord)) continue;
         uint16_t sid = (uint16_t)(sidWord >> 16);
         if (sid >= 0x80) continue;
-        MhLog("[mh] MM PlayState candidate @0x%08X init=0x%08X main=0x%08X sceneId=0x%X", base, initv, mainv, sid);
+        (void)initv;
+        MhLog("[mh] MM PlayState candidate @0x%08X size=0x%X main=0x%08X sceneId=0x%X", base, szv, mainv, sid);
         sScanCursor += 4;
         return base;
     }
@@ -625,17 +627,17 @@ extern "C" void MegatonHammer_PerFrame()
         // instead of the old silent absence of the sceneId line. Cheap once found (sPlayAddr is cached).
         if ((sFrame % 30) == 0)
         {
-            // Re-validate the cached PlayState (its init must still be Play_Init) — the gamestate changes as
-            // the game boots, so a stale address would report a defunct scene.
+            // Re-validate the cached PlayState (its size must still look like a PlayState) — the gamestate
+            // changes as the game boots, so a stale address would report a defunct scene.
             if (sPlayAddr != 0)
             {
-                uint32_t iv = 0;
-                if (!g_MMU->MemoryValue32(sPlayAddr + kGS_init, iv) || iv != kMM_Play_Init) sPlayAddr = 0;
+                uint32_t sv = 0;
+                if (!g_MMU->MemoryValue32(sPlayAddr + kGS_size, sv) || sv < 0x11000 || sv > 0x14000) sPlayAddr = 0;
             }
             if (sPlayAddr == 0)
             {
                 uint32_t found = MhScanForPlayStateMM(0x8000);
-                if (found != 0) { sPlayAddr = found; MhLog("[mh] MM PlayState (Play_Init) found at 0x%08X", sPlayAddr); }
+                if (found != 0) { sPlayAddr = found; MhLog("[mh] MM PlayState found at 0x%08X", sPlayAddr); }
             }
             uint32_t entr = 0; g_MMU->MemoryValue32(kMM_SaveContext, entr);   // save.entrance (scene_no)
             if (sPlayAddr != 0)
