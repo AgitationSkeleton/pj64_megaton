@@ -584,11 +584,27 @@ extern "C" void MegatonHammer_PerFrame()
                 if (sParams.debugControls) MhDebugControls(sPlayAddr, true);
             }
         }
-        if ((sFrame % 30) == 0 && sPlayAddr != 0)
+        // PASSIVE render probe (independent of the warp/inventory work-gating above): every heartbeat, find
+        // and LOG the live PlayState's sceneId so the log always shows WHICH scene actually loaded. A blank
+        // scene (e.g. an appended scene the DMA couldn't reach) shows "no PlayState" or a garbage sceneId here,
+        // instead of the old silent absence of the sceneId line. Cheap once found (sPlayAddr is cached).
+        if ((sFrame % 30) == 0)
         {
-            uint32_t sid = 0;
-            g_MMU->MemoryValue32(sPlayAddr + kMM_Play_sceneId, sid);
-            MhLog("[mh] MM hb frame=%llu sceneId=0x%X gameMode=%d", (unsigned long long)sFrame, (uint16_t)sid, curMode);
+            if (sPlayAddr == 0 && curMode == GAMEMODE_NORMAL)
+            {
+                uint32_t found = MhScanForPlayStateMM(0x8000);
+                if (found != 0) { sPlayAddr = found; MhLog("[mh] MM PlayState found at 0x%08X (render probe)", sPlayAddr); }
+            }
+            if (sPlayAddr != 0)
+            {
+                uint32_t sid = 0;
+                g_MMU->MemoryValue32(sPlayAddr + kMM_Play_sceneId, sid);
+                MhLog("[mh] MM render probe frame=%llu sceneId=0x%X gameMode=%d", (unsigned long long)sFrame, (uint16_t)sid, curMode);
+            }
+            else
+            {
+                MhLog("[mh] MM render probe frame=%llu: no live PlayState (scene not loaded yet / gameMode=%d)", (unsigned long long)sFrame, curMode);
+            }
         }
         return;
     }
