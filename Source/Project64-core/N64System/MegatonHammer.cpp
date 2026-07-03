@@ -272,7 +272,10 @@ static uint32_t MhScanForPlayStateMM(uint32_t chunk)
         if (gfx < kRamBase || gfx >= end) continue;
         if (mainv < codeLo || mainv >= codeHi) continue;
         if (destroyv < codeLo || destroyv >= codeHi) continue;
-        if (initv < codeLo || initv >= codeHi) continue;
+        // Require the EXACT play gamestate: init == Play_Init. The old generic "any 3 distinct code funcs"
+        // matched the title/file-select gamestate (init=0x800982E8) and reported its stale sceneId, so the
+        // probe couldn't tell a loaded scene from a black one. codeLo/codeHi kept as a compile guard.
+        if (initv != kMM_Play_Init || codeLo > codeHi) continue;
         if (mainv == destroyv || mainv == initv || destroyv == initv) continue;   // 3 distinct funcs
         // sceneId is an s16 at +0xA4 (high half of the word at +0xA4); must be a plausible scene id (< 0x80).
         if (!g_MMU->MemoryValue32(base + (kMM_Play_sceneId & ~3u), sidWord)) continue;
@@ -590,20 +593,30 @@ extern "C" void MegatonHammer_PerFrame()
         // instead of the old silent absence of the sceneId line. Cheap once found (sPlayAddr is cached).
         if ((sFrame % 30) == 0)
         {
-            if (sPlayAddr == 0 && curMode == GAMEMODE_NORMAL)
+            // Re-validate the cached PlayState (its init must still be Play_Init) — the gamestate changes as
+            // the game boots, so a stale address would report a defunct scene.
+            if (sPlayAddr != 0)
+            {
+                uint32_t iv = 0;
+                if (!g_MMU->MemoryValue32(sPlayAddr + kGS_init, iv) || iv != kMM_Play_Init) sPlayAddr = 0;
+            }
+            if (sPlayAddr == 0)
             {
                 uint32_t found = MhScanForPlayStateMM(0x8000);
-                if (found != 0) { sPlayAddr = found; MhLog("[mh] MM PlayState found at 0x%08X (render probe)", sPlayAddr); }
+                if (found != 0) { sPlayAddr = found; MhLog("[mh] MM PlayState (Play_Init) found at 0x%08X", sPlayAddr); }
             }
+            uint32_t entr = 0; g_MMU->MemoryValue32(kMM_SaveContext, entr);   // save.entrance (scene_no)
             if (sPlayAddr != 0)
             {
                 uint32_t sid = 0;
                 g_MMU->MemoryValue32(sPlayAddr + kMM_Play_sceneId, sid);
-                MhLog("[mh] MM render probe frame=%llu sceneId=0x%X gameMode=%d", (unsigned long long)sFrame, (uint16_t)sid, curMode);
+                MhLog("[mh] MM render probe frame=%llu sceneId=0x%X save.entrance=0x%08X gameMode=%d",
+                      (unsigned long long)sFrame, (uint16_t)(sid >> 16), entr, curMode);
             }
             else
             {
-                MhLog("[mh] MM render probe frame=%llu: no live PlayState (scene not loaded yet / gameMode=%d)", (unsigned long long)sFrame, curMode);
+                MhLog("[mh] MM render probe frame=%llu: no live play scene (save.entrance=0x%08X gameMode=%d)",
+                      (unsigned long long)sFrame, entr, curMode);
             }
         }
         return;
