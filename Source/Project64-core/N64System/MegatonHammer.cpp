@@ -584,33 +584,37 @@ extern "C" void MegatonHammer_PerFrame()
             MhLog("[mh] frame=%llu MM gameMode=%d (0x%X)", (unsigned long long)sFrame, curMode, (uint32_t)curMode);
             sLastGameMode = curMode;
         }
-        // Only scan/warp during actual gameplay (GAMEMODE_NORMAL=0), AFTER the title screen has appeared
-        // (gameMode 1). Otherwise the heuristic can match the title/file-select gamestate (no real
-        // PlayState there) and the warp would corrupt it → black-screen freeze.
-        static bool sSeenTitle = false;
-        static bool sMmInvDone = false;
-        static uint64_t sMmNormalFrame = 0;   // first frame GAMEMODE_NORMAL was seen (0 = not yet)
-        if (curMode == GAMEMODE_TITLE_SCREEN) sSeenTitle = true;
-        if (sSeenTitle && curMode == GAMEMODE_NORMAL && sMmNormalFrame == 0) sMmNormalFrame = sFrame;
+        // "Save is up" = the boot debug save has run and memcpy'd the Save struct (entrance + inventory
+        // together) into gSaveContext. save.entrance @ kMM_SaveContext+0 goes 0 -> 0x5400 at that point.
+        // This is the robust gameplay signal: MM AUTO-BOOTS (MmInjectScene) straight into Play and NEVER
+        // shows GAMEMODE_TITLE_SCREEN, so the old sSeenTitle gate never fired and inventory/debug-controls
+        // never ran. gameMode also reads 0 both before boot (zeroed RAM) and in-game (NORMAL), so it can't
+        // gate on its own — pair it with entrance != 0.
+        static int  sMmInvApplied = 0;
+        static uint64_t sMmSaveUpFrame = 0;   // first frame save.entrance became non-zero (0 = not yet)
+        uint32_t saveEntr = 0;
+        g_MMU->MemoryValue32(kMM_SaveContext, saveEntr);
+        bool saveUp = (saveEntr != 0) && (curMode == GAMEMODE_NORMAL);
+        if (saveUp && sMmSaveUpFrame == 0) sMmSaveUpFrame = sFrame;
 
-        // Custom/empty inventory does NOT depend on locating the PlayState: the pokes target the FIXED
-        // SaveContext (kMM_SaveContext), and we only need to be past the debug save (which runs during
-        // Play_Init, before GAMEMODE_NORMAL). Applying it here — decoupled from the fragile PlayState scan —
-        // is what makes MM N64 honour the editor's playtest inventory instead of only the debug loadout.
-        // A short delay after NORMAL guarantees the debug save has populated the SaveContext first; we then
-        // overwrite its inventory with ours. (Previously this was gated behind sPlayAddr and often never ran.)
-        if (sParams.inventory != 0 && !sMmInvDone && sMmNormalFrame != 0 && (sFrame - sMmNormalFrame) >= 4)
+        // Custom/empty inventory does NOT depend on locating the PlayState — the pokes target the FIXED
+        // kMM_SaveContext. Apply once the save is up, then RE-ASSERT a couple more times (spaced) so we win
+        // even if the debug save writes inventory slightly after entrance. The player can't have changed
+        // inventory this early, so re-applying is harmless. This is what makes MM N64 honour the editor's
+        // playtest inventory instead of only the debug loadout.
+        if (sParams.inventory != 0 && sMmSaveUpFrame != 0 && sMmInvApplied < 3 &&
+            (sFrame - sMmSaveUpFrame) >= (uint64_t)(4 + sMmInvApplied * 20))
         {
             MhApplySavePokes(kMM_SaveContext);
-            sMmInvDone = true;
-            MhLog("[mh] MM custom inventory applied @0x%08X (%zu pokes, frame=%llu)",
-                  kMM_SaveContext, sSavePokes.size(), (unsigned long long)sFrame);
+            sMmInvApplied++;
+            MhLog("[mh] MM custom inventory applied @0x%08X (%zu pokes, pass %d, frame=%llu)",
+                  kMM_SaveContext, sSavePokes.size(), sMmInvApplied, (unsigned long long)sFrame);
         }
 
         // MM normally AUTO-BOOTS via MmInjectScene (no warp entrance in params), so activate on any work we
         // owe: a warp (rare) or debug controls. These DO need a live PlayState, so keep the scan gate here.
         bool wantWork = sParams.valid || sParams.debugControls;
-        if (wantWork && sSeenTitle && curMode == GAMEMODE_NORMAL)
+        if (wantWork && saveUp)
         {
             if (sPlayAddr == 0)
             {
