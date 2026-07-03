@@ -589,10 +589,27 @@ extern "C" void MegatonHammer_PerFrame()
         // PlayState there) and the warp would corrupt it → black-screen freeze.
         static bool sSeenTitle = false;
         static bool sMmInvDone = false;
+        static uint64_t sMmNormalFrame = 0;   // first frame GAMEMODE_NORMAL was seen (0 = not yet)
         if (curMode == GAMEMODE_TITLE_SCREEN) sSeenTitle = true;
+        if (sSeenTitle && curMode == GAMEMODE_NORMAL && sMmNormalFrame == 0) sMmNormalFrame = sFrame;
+
+        // Custom/empty inventory does NOT depend on locating the PlayState: the pokes target the FIXED
+        // SaveContext (kMM_SaveContext), and we only need to be past the debug save (which runs during
+        // Play_Init, before GAMEMODE_NORMAL). Applying it here — decoupled from the fragile PlayState scan —
+        // is what makes MM N64 honour the editor's playtest inventory instead of only the debug loadout.
+        // A short delay after NORMAL guarantees the debug save has populated the SaveContext first; we then
+        // overwrite its inventory with ours. (Previously this was gated behind sPlayAddr and often never ran.)
+        if (sParams.inventory != 0 && !sMmInvDone && sMmNormalFrame != 0 && (sFrame - sMmNormalFrame) >= 4)
+        {
+            MhApplySavePokes(kMM_SaveContext);
+            sMmInvDone = true;
+            MhLog("[mh] MM custom inventory applied @0x%08X (%zu pokes, frame=%llu)",
+                  kMM_SaveContext, sSavePokes.size(), (unsigned long long)sFrame);
+        }
+
         // MM normally AUTO-BOOTS via MmInjectScene (no warp entrance in params), so activate on any work we
-        // owe: a warp (rare), the custom inventory, or debug controls. We still need a live PlayState first.
-        bool wantWork = sParams.valid || sParams.inventory != 0 || sParams.debugControls;
+        // owe: a warp (rare) or debug controls. These DO need a live PlayState, so keep the scan gate here.
+        bool wantWork = sParams.valid || sParams.debugControls;
         if (wantWork && sSeenTitle && curMode == GAMEMODE_NORMAL)
         {
             if (sPlayAddr == 0)
@@ -611,12 +628,6 @@ extern "C" void MegatonHammer_PerFrame()
                     MhDoWarpMM(sParams.entranceIndex);
                     sWarpDone = true;
                     MhLog("[mh] MM WARP triggered: entrance=0x%04X (via play 0x%08X)", sParams.entranceIndex, sPlayAddr);
-                }
-                // Custom/empty inventory — apply once (the file presence is the gate; absent => debug inv).
-                if (sParams.inventory != 0 && !sMmInvDone)
-                {
-                    MhApplySavePokes(kMM_SaveContext);
-                    sMmInvDone = true;
                 }
                 if (sParams.debugControls) MhDebugControls(sPlayAddr, true);
             }
