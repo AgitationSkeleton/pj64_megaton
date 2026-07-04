@@ -567,6 +567,20 @@ extern "C" void MegatonHammer_PerFrame()
     if (sMaxFrames != 0 && sFrame >= sMaxFrames)
     {
         MhLog("[mh] MH_MAXFRAMES=%llu reached -- exiting", (unsigned long long)sMaxFrames);
+        // MH diagnostic: dump full RDRAM so a hang/fault can be parsed offline against the ELF symbols.
+        const char * dp = getenv("MH_RAMDUMP");
+        if (dp != nullptr && g_MMU != nullptr)
+        {
+            uint8_t * rdram = g_MMU->Rdram();
+            uint32_t rsz = g_MMU->RdramSize();
+            if (rsz == 0 || rsz > 0x800000) rsz = 0x800000;
+            if (rdram != nullptr)
+            {
+                FILE * df = fopen(dp, "wb");
+                if (df != nullptr) { fwrite(rdram, 1, rsz, df); fclose(df); MhLog("[mh] rdram dumped %u bytes -> %s", rsz, dp); }
+                else { MhLog("[mh] rdram dump FAILED to open %s", dp); }
+            }
+        }
         if (sLog != nullptr) { fflush(sLog); fclose(sLog); sLog = nullptr; }
         _exit(0);
     }
