@@ -4,14 +4,14 @@
 #define VERSION_MAJOR               4
 #define VERSION_MINOR               0
 #define VERSION_REVISION            0
-#define VERSION_BUILD               9999
+#define VERSION_BUILD               9
 #define VERSION_PREFIX              "Dev-"
 #define VERSION_BUILD_YEAR          2026
 
-#define GIT_REVISION                ""
-#define GIT_REVISION_SHORT          ""
-#define GIT_DIRTY                   ""
-#define GIT_VERSION                 ""
+#define GIT_REVISION                "1bbacd80f4859d2f3f13d88e732fc0ee0dbff422"
+#define GIT_REVISION_SHORT          "1bbacd8"
+#define GIT_DIRTY                   "Dirty"
+#define GIT_VERSION                 "1bbacd8-Dirty"
 
 #define VER_FILE_DESCRIPTION_STR    "Project64"
 #define VER_FILE_VERSION            VERSION_MAJOR, VERSION_MINOR, VERSION_REVISION, VERSION_BUILD

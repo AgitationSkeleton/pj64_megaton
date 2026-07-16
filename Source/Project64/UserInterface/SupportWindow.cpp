@@ -25,6 +25,11 @@ void CALLBACK CSupportWindow::TimerProc(HWND, UINT, UINT_PTR idEvent, DWORD)
 
 void CSupportWindow::Show(HWND hParent, bool Delay)
 {
+    // MegatonHammer fork: suppress the Project64 support/donation nag popup entirely (it interferes
+    // with playtesting). Early-return before any timer/dialog is created.
+    (void)hParent; (void)Delay;
+    return;
+
     m_Delay = Delay;
     if (Delay)
     {
